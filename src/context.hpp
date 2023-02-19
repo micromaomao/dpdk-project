@@ -36,12 +36,14 @@ struct port_context {
   struct rte_ether_addr mac_addr;
   struct rte_eth_dev_info dev_info;
   std::vector<lcore_context> lcore_contexts;
+  StatsAggregator *stats_aggregator;
+  RustInstant *start_time;
 
   bool ip4_checksum_offload;
   bool udp_checksum_offload;
 
-  port_context(DPRunMode mode, uint16_t rte_port_id, uint32_t txq,
-               uint32_t rxq);
+  port_context(DPRunMode mode, uint16_t rte_port_id, uint32_t txq, uint32_t rxq,
+               StatsAggregator *stats_aggregator, RustInstant *start_time);
   ~port_context();
   void assign_lcores(const std::vector<unsigned> &lcores);
   bool config_port();

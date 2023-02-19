@@ -12,6 +12,8 @@
 __rte_noreturn int lcore_main_reflect(void *arg) {
   lcore_context *lcore_ctx = (lcore_context *)arg;
   uint16_t port = lcore_ctx->port_ctx->rte_port_id;
+  StatsAggregator *stats = lcore_ctx->port_ctx->stats_aggregator;
+  RustInstant *start_time = lcore_ctx->port_ctx->start_time;
 
   printf("Core %u handling packets for port %u, rx queue %d, tx queue %d\n",
          lcore_ctx->rte_lcore_id, port, lcore_ctx->rx_qid, lcore_ctx->tx_qid);
@@ -36,12 +38,15 @@ __rte_noreturn int lcore_main_reflect(void *arg) {
 
     const uint16_t nb_rx =
         rte_eth_rx_burst(port, lcore_ctx->rx_qid, bufs, BURST_SIZE);
+    uint16_t nb_tx = 0;
 
     if (nb_rx == 0) {
       continue;
     }
 
     bool dropped_mbuf = false;
+
+    uint64_t time_val = dp_get_time_value_since(start_time);
 
     for (int i = 0; i < nb_rx; i++) {
       struct rte_mbuf *&m = bufs[i];
@@ -84,18 +89,21 @@ __rte_noreturn int lcore_main_reflect(void *arg) {
         if (bufs[i]) {
           if (rte_eth_tx_burst(port, lcore_ctx->tx_qid, &bufs[i], 1) == 0) {
             rte_pktmbuf_free(bufs[i]);
+          } else {
+            nb_tx += 1;
           }
         }
       }
     } else {
-      const uint16_t nb_tx =
-          rte_eth_tx_burst(port, lcore_ctx->tx_qid, bufs, nb_rx);
+      nb_tx = rte_eth_tx_burst(port, lcore_ctx->tx_qid, bufs, nb_rx);
 
       // Free any unsent packets
       for (int i = nb_tx; i < nb_rx; i++) {
         rte_pktmbuf_free(bufs[i]);
       }
     }
+
+    dp_stats_add(stats, time_val, nb_tx, nb_rx, 0, 0);
   }
 }
 
@@ -204,6 +212,10 @@ int main(int argc, char *argv[]) {
   }
 
   std::vector<port_context> contexts;
+  // TODO: get this from cmd args
+  StatsAggregator *stats_agg =
+      dp_new_stats_aggregator(1000, 1000, 1000, "/dev/stdout");
+  RustInstant *start_time = dp_get_reference_time();
 
   // Make sure we launch on main last.
 
@@ -221,7 +233,8 @@ int main(int argc, char *argv[]) {
 
   for (int i = 0; i < nb_ports; i++) {
     contexts.emplace_back(parsed_args->mode, rte_ports_matched[i],
-                          parsed_args->nb_txq, parsed_args->nb_rxq);
+                          parsed_args->nb_txq, parsed_args->nb_rxq, stats_agg,
+                          start_time);
     lcore_assignment.clear();
     for (int j = 0; j < cores_per_port; j++) {
       lcore_assignment.push_back(available_lcores.at(next_lcore_in_list++));
@@ -254,6 +267,10 @@ int main(int argc, char *argv[]) {
 
   // Run context deallocators, which may free rte resources.
   contexts.clear();
+
+  dp_free_stats_aggregator(stats_agg);
+  dp_free_reference_time(start_time);
+  stats_agg = nullptr;
 
   rte_eal_cleanup();
 

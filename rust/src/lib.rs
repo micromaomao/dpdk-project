@@ -1,5 +1,7 @@
 mod cmdargs;
 mod misc_types;
+mod stats;
+
 use etherparse::{Ethernet2Header, Ipv4Header, UdpHeader};
 use std::mem::swap;
 

@@ -11,9 +11,11 @@ lcore_context::lcore_context(struct rte_mempool *mbuf_pool, unsigned pool_size,
 }
 
 port_context::port_context(DPRunMode mode, uint16_t rte_port_id, uint32_t txq,
-                           uint32_t rxq)
+                           uint32_t rxq, StatsAggregator *stats_aggregator,
+                           RustInstant *start_time)
     : mode(mode), rte_port_id(rte_port_id), txq(txq), rxq(rxq),
-      rte_port_started(false), ip4_checksum_offload(false) {
+      rte_port_started(false), ip4_checksum_offload(false),
+      stats_aggregator(stats_aggregator), start_time(start_time) {
   if (rte_eth_macaddr_get(rte_port_id, &mac_addr) != 0) {
     rte_exit(EXIT_FAILURE, "Cannot get MAC address for port %u\n", rte_port_id);
   }
