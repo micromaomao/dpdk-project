@@ -1,3 +1,7 @@
+/**
+ * Does some boring work, like initializing ports, creating queues and mbuf
+ * pools, etc
+ */
 #pragma once
 
 extern "C" {

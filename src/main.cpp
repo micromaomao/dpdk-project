@@ -26,16 +26,21 @@ __rte_noreturn int lcore_main_reflect(void *arg) {
   uint16_t port = lcore_ctx->port_ctx->rte_port_id;
   assert(lcore_ctx->port_ctx->rte_port_started);
 
+  printf("Core %u forwarding packets on port %u, rx queue %d, tx queue %d\n",
+         lcore_ctx->rte_lcore_id, port, lcore_ctx->rx_qid, lcore_ctx->tx_qid);
+
   while (true) {
     /* Get burst of RX packets */
     struct rte_mbuf *bufs[BURST_SIZE];
-    const uint16_t nb_rx = rte_eth_rx_burst(port, 0, bufs, BURST_SIZE);
+    const uint16_t nb_rx =
+        rte_eth_rx_burst(port, lcore_ctx->rx_qid, bufs, BURST_SIZE);
 
     if (unlikely(nb_rx == 0))
       continue;
 
     /* Send burst of TX packets */
-    const uint16_t nb_tx = rte_eth_tx_burst(port, 0, bufs, nb_rx);
+    const uint16_t nb_tx =
+        rte_eth_tx_burst(port, lcore_ctx->tx_qid, bufs, nb_rx);
 
     /* Free any unsent packets. */
     if (unlikely(nb_tx < nb_rx)) {
@@ -139,7 +144,8 @@ int main(int argc, char *argv[]) {
     cores_per_port = parsed_args->nb_rxq;
   }
 
-  int expected_nb_cores = nb_ports * cores_per_port;
+  // For simplicity, we don't run stuff on the main lcore.
+  int expected_nb_cores = nb_ports * cores_per_port + 1;
 
   int nb_cores = rte_lcore_count();
   if (expected_nb_cores != nb_cores) {
@@ -159,6 +165,10 @@ int main(int argc, char *argv[]) {
                           parsed_args->nb_txq, parsed_args->nb_rxq);
     lcore_assignment.clear();
     for (int j = 0; j < cores_per_port; j++) {
+      if (next_lcore == rte_lcore_id()) {
+        // Can't use the main lcore.
+        next_lcore = rte_get_next_lcore(next_lcore, 0, 0);
+      }
       assert(next_lcore != RTE_MAX_LCORE);
       lcore_assignment.push_back(next_lcore);
       next_lcore = rte_get_next_lcore(next_lcore, 0, 0);

@@ -51,9 +51,10 @@ port_context::~port_context() {
 void port_context::assign_lcores(const std::vector<unsigned> &lcores) {
   int port_socket_id = rte_eth_dev_socket_id(rte_port_id);
 
-  if (port_socket_id <= 0) {
+  if (port_socket_id < 0) {
     fprintf(stderr, "WARNING: port %u socket id could not be determined.\n",
             rte_port_id);
+    port_socket_id = SOCKET_ID_ANY;
   }
 
   for (unsigned lcore : lcores) {
@@ -144,6 +145,9 @@ bool port_context::config_port() {
     txq_idx += 1;
   }
 
+  printf("Port %u: set up %d rx queues and %d tx queues\n", rte_port_id,
+         rxq_idx, txq_idx);
+
   retval = rte_eth_dev_start(rte_port_id);
   if (retval < 0) {
     fprintf(stderr, "Failed to start port %d: %s\n", rte_port_id,
@@ -158,23 +162,38 @@ bool port_context::config_port() {
   return true;
 }
 
+bool launch_on(int lcore, lcore_function_t *func, void *arg) {
+  if (lcore == rte_lcore_id()) {
+    fprintf(stderr, "ERROR: trying to launch function on main lcore.\n");
+    return false;
+  } else {
+    int res = rte_eal_remote_launch(func, arg, lcore);
+    if (res != 0) {
+      fprintf(stderr, "Failed to launch on lcore %d: %s\n", lcore,
+              strerror(-res));
+      return false;
+    }
+    return true;
+  }
+}
+
 bool port_context::start() {
+  bool success = true;
+
   if (mode == DPRunMode::Reflect) {
     for (auto &lcore_ctx : lcore_contexts) {
       assert(lcore_ctx.rx_qid != -1 && lcore_ctx.tx_qid != -1);
-      if (lcore_ctx.rte_lcore_id == rte_lcore_id()) {
-        lcore_main_reflect(&lcore_ctx);
-      } else {
-        rte_eal_remote_launch(&lcore_main_reflect, &lcore_ctx,
-                              lcore_ctx.rte_lcore_id);
+      if (!launch_on(lcore_ctx.rte_lcore_id, &lcore_main_reflect, &lcore_ctx)) {
+        success = false;
       }
     }
-    return true;
   } else if (mode == DPRunMode::SendRecv) {
     fprintf(stderr, "Unimplemented\n");
-    return false;
+    success = false;
   } else {
     assert(false);
-    return false;
+    success = false;
   }
+
+  return success;
 }
