@@ -2,11 +2,13 @@
 #include "consts.hpp"
 #include "main.hpp"
 
-lcore_context::lcore_context(const port_context *port_ctx,
-                             struct rte_mempool *mbuf_pool, unsigned pool_size,
+lcore_context::lcore_context(struct rte_mempool *mbuf_pool, unsigned pool_size,
                              unsigned rte_lcore_id)
-    : port_ctx(port_ctx), mbuf_pool(mbuf_pool), pool_size(pool_size),
-      rte_lcore_id(rte_lcore_id), rx_qid(-1), tx_qid(-1) {}
+    : port_ctx(nullptr), mbuf_pool(mbuf_pool), pool_size(pool_size),
+      rte_lcore_id(rte_lcore_id), rx_qid(-1), tx_qid(-1) {
+  // We initialize port_ctx to nullptr, instead of taking the reference here, to
+  // prevent the port ctx moving later causing a use-after-free.
+}
 
 port_context::port_context(DPRunMode mode, uint16_t rte_port_id, uint32_t txq,
                            uint32_t rxq)
@@ -75,7 +77,7 @@ void port_context::assign_lcores(const std::vector<unsigned> &lcores) {
       rte_exit(EXIT_FAILURE, "Cannot create mbuf pool for lcore %u\n", lcore);
     }
 
-    lcore_contexts.emplace_back(this, mbuf_pool, pool_size, lcore);
+    lcore_contexts.emplace_back(mbuf_pool, pool_size, lcore);
   }
 }
 
@@ -161,7 +163,7 @@ bool port_context::config_port() {
 
   rte_port_started = true;
 
-  // rte_eth_promiscuous_enable(rte_port_id);
+  rte_eth_promiscuous_enable(rte_port_id);
 
   return true;
 }
@@ -183,10 +185,12 @@ bool launch_on(int lcore, lcore_function_t *func, void *arg) {
 
 bool port_context::start() {
   bool success = true;
+  assert(rte_port_started);
 
   if (mode == DPRunMode::Reflect) {
     for (auto &lcore_ctx : lcore_contexts) {
       assert(lcore_ctx.rx_qid != -1 && lcore_ctx.tx_qid != -1);
+      lcore_ctx.port_ctx = this;
       if (!launch_on(lcore_ctx.rte_lcore_id, &lcore_main_reflect, &lcore_ctx)) {
         success = false;
       }

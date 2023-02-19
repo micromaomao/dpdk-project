@@ -12,29 +12,89 @@
 __rte_noreturn int lcore_main_reflect(void *arg) {
   lcore_context *lcore_ctx = (lcore_context *)arg;
   uint16_t port = lcore_ctx->port_ctx->rte_port_id;
-  assert(lcore_ctx->port_ctx->rte_port_started);
 
   printf("Core %u handling packets for port %u, rx queue %d, tx queue %d\n",
          lcore_ctx->rte_lcore_id, port, lcore_ctx->rx_qid, lcore_ctx->tx_qid);
 
+  if (!lcore_ctx->port_ctx->rte_port_started) {
+    fprintf(stderr, "Core %u: Port %u not started\n", lcore_ctx->rte_lcore_id,
+            port);
+  }
+  assert(lcore_ctx->port_ctx->rte_port_started);
+
+  const uint32_t max_pkt_size = RTE_MBUF_DEFAULT_BUF_SIZE;
+  // To be used to concatenate the segments, if there are more than one.
+  char linear_buf[max_pkt_size];
+
+  bool need_ip_checksum = !lcore_ctx->port_ctx->ip4_checksum_offload;
+  bool need_udp_checksum = !lcore_ctx->port_ctx->udp_checksum_offload;
+
   while (true) {
-    /* Get burst of RX packets */
-    struct rte_mbuf *bufs[BURST_SIZE];
+    // In this bufs array, a null pointer indicates that we want to drop the
+    // packet.
+    struct rte_mbuf *bufs[BURST_SIZE] = {0};
+
     const uint16_t nb_rx =
         rte_eth_rx_burst(port, lcore_ctx->rx_qid, bufs, BURST_SIZE);
 
-    if (unlikely(nb_rx == 0))
+    if (nb_rx == 0) {
       continue;
+    }
 
-    /* Send burst of TX packets */
-    const uint16_t nb_tx =
-        rte_eth_tx_burst(port, lcore_ctx->tx_qid, bufs, nb_rx);
+    bool dropped_mbuf = false;
 
-    /* Free any unsent packets. */
-    if (unlikely(nb_tx < nb_rx)) {
-      uint16_t buf;
-      for (buf = nb_tx; buf < nb_rx; buf++)
-        rte_pktmbuf_free(bufs[buf]);
+    for (int i = 0; i < nb_rx; i++) {
+      struct rte_mbuf *&m = bufs[i];
+      uint32_t len = rte_pktmbuf_pkt_len(m);
+      assert(len <= max_pkt_size);
+      int linearize_ret = rte_pktmbuf_linearize(m);
+      uint8_t *data;
+
+      if (linearize_ret != 0) {
+        // Linearize failed.
+
+        // For simplicity, we require all packets to have one segment before
+        // being processed. Therefore, we throw away this mbuf and create a new
+        // one if we cannot linearize it.
+        const char *ptr = (const char *)rte_pktmbuf_read(m, 0, len, linear_buf);
+        assert(ptr == linear_buf);
+        rte_pktmbuf_free(m);
+        m = rte_pktmbuf_alloc(lcore_ctx->mbuf_pool);
+        if (!m) {
+          dropped_mbuf = true;
+          continue;
+        }
+        data = (uint8_t *)rte_pktmbuf_append(m, len);
+        memcpy(data, linear_buf, len);
+      } else {
+        data = rte_pktmbuf_mtod(m, uint8_t *);
+      }
+
+      // Rust time!
+      if (!dp_process_reflect_pkt(data, len, need_ip_checksum,
+                                  need_udp_checksum)) {
+        rte_pktmbuf_free(m);
+        m = nullptr;
+        dropped_mbuf = true;
+      }
+    }
+
+    if (dropped_mbuf) {
+      for (int i = 0; i < nb_rx; i++) {
+        if (bufs[i]) {
+          if (rte_eth_tx_burst(port, lcore_ctx->tx_qid, &bufs[i], 1) == 0) {
+            rte_pktmbuf_free(bufs[i]);
+          }
+        }
+      }
+    } else {
+      const uint16_t nb_tx =
+          rte_eth_tx_burst(port, lcore_ctx->tx_qid, bufs, nb_rx);
+
+      // Free any unsent packets
+      for (int i = nb_tx; i < nb_rx; i++) {
+        rte_pktmbuf_free(bufs[i]);
+      }
     }
   }
 }

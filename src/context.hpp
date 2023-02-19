@@ -20,8 +20,8 @@ struct lcore_context {
   unsigned rte_lcore_id;
   int rx_qid, tx_qid;
 
-  lcore_context(const port_context *port_ctx, struct rte_mempool *mbuf_pool,
-                unsigned pool_size, unsigned rte_lcore_id);
+  lcore_context(struct rte_mempool *mbuf_pool, unsigned pool_size,
+                unsigned rte_lcore_id);
 };
 
 /**
