@@ -3,6 +3,7 @@ mod misc_types;
 mod stats;
 
 use etherparse::{Ethernet2Header, Ipv4Header, UdpHeader};
+use misc_types::EtherAddr;
 use std::mem::swap;
 
 macro_rules! unwrap {
@@ -50,4 +51,25 @@ pub unsafe extern "C" fn dp_process_reflect_pkt(
   _ = udp.write(&mut pkt);
 
   true
+}
+
+#[repr(C)]
+pub struct DpMakePacketArgs {
+  pub pkt_size: u32,
+  pub src_mac: EtherAddr,
+  pub dst_mac: EtherAddr,
+  pub src_ip: [u8; 4],
+  pub dst_ip: [u8; 4],
+  pub src_port: u16,
+  pub dst_port: u16,
+  pub index: u64,
+  pub timestamp: u64,
+  pub need_ip_checksum: bool,
+  pub need_udp_checksum: bool,
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn dp_make_packet(pkt_buf: *mut u8, pkt_buf_sz: usize, args: &DpMakePacketArgs) -> usize {
+  let mut pkt_buf = std::slice::from_raw_parts_mut(pkt_buf, pkt_buf_sz);
+  unimplemented!()
 }

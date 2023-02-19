@@ -70,6 +70,12 @@ __rte_noreturn int lcore_main_reflect(void *arg) {
           continue;
         }
         data = (uint8_t *)rte_pktmbuf_append(m, len);
+        if (!data) {
+          rte_pktmbuf_free(m);
+          m = nullptr;
+          dropped_mbuf = true;
+          continue;
+        }
         memcpy(data, linear_buf, len);
       } else {
         data = rte_pktmbuf_mtod(m, uint8_t *);
@@ -104,6 +110,116 @@ __rte_noreturn int lcore_main_reflect(void *arg) {
     }
 
     dp_stats_add(stats, time_val, nb_tx, nb_rx, 0, 0);
+  }
+}
+
+__rte_noreturn int lcore_main_send(void *arg) {
+  lcore_context *lcore_ctx = (lcore_context *)arg;
+  uint16_t port = lcore_ctx->port_ctx->rte_port_id;
+  StatsAggregator *stats = lcore_ctx->port_ctx->stats_aggregator;
+  RustInstant *start_time = lcore_ctx->port_ctx->start_time;
+
+  printf("Core %u sending packets for port %u on tx queue %d\n",
+         lcore_ctx->rte_lcore_id, port, lcore_ctx->tx_qid);
+
+  if (!lcore_ctx->port_ctx->rte_port_started) {
+    fprintf(stderr, "Core %u: Port %u not started\n", lcore_ctx->rte_lcore_id,
+            port);
+  }
+  assert(lcore_ctx->port_ctx->rte_port_started);
+
+  int payload_size = 1000; // TODO: make configurable
+  const int buf_size = RTE_MBUF_DEFAULT_BUF_SIZE;
+
+  DpMakePacketArgs mk_args;
+  mk_args.pkt_size = payload_size;
+  memcpy(&mk_args.src_mac, &lcore_ctx->port_ctx->mac_addr.addr_bytes, 6);
+  mk_args.dst_mac[0] = 0x12;
+  mk_args.dst_mac[1] = 0x34;
+  mk_args.dst_mac[2] = 0x56;
+  mk_args.dst_mac[3] = 0x78;
+  mk_args.dst_mac[4] = 0x9a;
+  mk_args.dst_mac[5] = 0xbc;
+  // FIXME
+
+  // TODO: src and dst IP and port
+
+  mk_args.need_ip_checksum = !lcore_ctx->port_ctx->ip4_checksum_offload;
+  mk_args.need_udp_checksum = !lcore_ctx->port_ctx->udp_checksum_offload;
+
+  while (true) {
+    struct rte_mbuf *bufs[BURST_SIZE] = {0};
+    int nb_pkts = 0;
+
+    uint64_t time_val = dp_get_time_value_since(start_time);
+
+    for (int i = 0; i < BURST_SIZE; i += 1) {
+      bufs[i] = rte_pktmbuf_alloc(lcore_ctx->mbuf_pool);
+      if (!bufs[i]) {
+        break;
+      }
+      if (!rte_pktmbuf_append(bufs[i], buf_size)) {
+        rte_pktmbuf_free(bufs[i]);
+        break;
+      }
+      nb_pkts += 1;
+    }
+
+    for (int i = 0; i < nb_pkts; i += 1) {
+      uint8_t *data = rte_pktmbuf_mtod(bufs[i], uint8_t *);
+      mk_args.index = 0;
+      mk_args.timestamp = time_val;
+      size_t written_len = dp_make_packet(data, buf_size, &mk_args);
+      assert(written_len <= buf_size);
+      rte_pktmbuf_data_len(bufs[i]) = written_len;
+    }
+
+    int nb_tx = rte_eth_tx_burst(port, lcore_ctx->tx_qid, bufs, nb_pkts);
+
+    // Free any unsent packets
+    for (int i = nb_tx; i < nb_pkts; i++) {
+      rte_pktmbuf_free(bufs[i]);
+    }
+
+    dp_stats_add(stats, time_val, nb_tx, 0, 0, 0);
+  }
+}
+
+__rte_noreturn int lcore_main_recv(void *arg) {
+  lcore_context *lcore_ctx = (lcore_context *)arg;
+  uint16_t port = lcore_ctx->port_ctx->rte_port_id;
+  StatsAggregator *stats = lcore_ctx->port_ctx->stats_aggregator;
+  RustInstant *start_time = lcore_ctx->port_ctx->start_time;
+
+  printf("Core %u receiving packets for port %u on rx queue %d\n",
+         lcore_ctx->rte_lcore_id, port, lcore_ctx->rx_qid);
+
+  if (!lcore_ctx->port_ctx->rte_port_started) {
+    fprintf(stderr, "Core %u: Port %u not started\n", lcore_ctx->rte_lcore_id,
+            port);
+  }
+  assert(lcore_ctx->port_ctx->rte_port_started);
+
+  int payload_size = 1000; // TODO: make configurable
+
+  while (true) {
+    struct rte_mbuf *bufs[BURST_SIZE] = {0};
+    int nb_rx = 0;
+
+    uint64_t time_val = dp_get_time_value_since(start_time);
+
+    nb_rx = rte_eth_rx_burst(port, lcore_ctx->rx_qid, bufs, BURST_SIZE);
+
+    if (nb_rx == 0) {
+      continue;
+    }
+
+    for (int i = 0; i < nb_rx; i++) {
+      // TODO: parse packet
+      rte_pktmbuf_free(bufs[i]);
+    }
+
+    dp_stats_add(stats, time_val, 0, nb_rx, 0, 0);
   }
 }
 
