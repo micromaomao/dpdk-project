@@ -130,6 +130,8 @@ bool port_context::config_port() {
       return false;
     }
     lcore_ctx.rx_qid = rxq_idx;
+    printf("Port %u: set up rx queue %d with %u descriptors\n", rte_port_id,
+           rxq_idx, nb_rxd);
     rxq_idx += 1;
 
     retval = rte_eth_tx_queue_setup(
@@ -142,6 +144,8 @@ bool port_context::config_port() {
       return false;
     }
     lcore_ctx.tx_qid = txq_idx;
+    printf("Port %u: set up tx queue %d with %u descriptors\n", rte_port_id,
+           txq_idx, nb_txd);
     txq_idx += 1;
   }
 
@@ -164,8 +168,8 @@ bool port_context::config_port() {
 
 bool launch_on(int lcore, lcore_function_t *func, void *arg) {
   if (lcore == rte_lcore_id()) {
-    fprintf(stderr, "ERROR: trying to launch function on main lcore.\n");
-    return false;
+    func(arg);
+    return true;
   } else {
     int res = rte_eal_remote_launch(func, arg, lcore);
     if (res != 0) {

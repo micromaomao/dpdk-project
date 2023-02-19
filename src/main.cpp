@@ -1,18 +1,6 @@
 /* Part of this file has been adopted from the DPDK sample app "skeleton",
  * licensed under BSD-3-Clause, copyrighted by Intel Corporation */
 
-extern "C" {
-#include <inttypes.h>
-#include <rte_cycles.h>
-#include <rte_eal.h>
-#include <rte_ethdev.h>
-#include <rte_ether.h>
-#include <rte_lcore.h>
-#include <rte_mbuf.h>
-#include <stdint.h>
-#include <stdlib.h>
-}
-
 #include <algorithm>
 #include <vector>
 
@@ -26,7 +14,7 @@ __rte_noreturn int lcore_main_reflect(void *arg) {
   uint16_t port = lcore_ctx->port_ctx->rte_port_id;
   assert(lcore_ctx->port_ctx->rte_port_started);
 
-  printf("Core %u forwarding packets on port %u, rx queue %d, tx queue %d\n",
+  printf("Core %u handling packets for port %u, rx queue %d, tx queue %d\n",
          lcore_ctx->rte_lcore_id, port, lcore_ctx->rx_qid, lcore_ctx->tx_qid);
 
   while (true) {
@@ -144,8 +132,7 @@ int main(int argc, char *argv[]) {
     cores_per_port = parsed_args->nb_rxq;
   }
 
-  // For simplicity, we don't run stuff on the main lcore.
-  int expected_nb_cores = nb_ports * cores_per_port + 1;
+  int expected_nb_cores = nb_ports * cores_per_port;
 
   int nb_cores = rte_lcore_count();
   if (expected_nb_cores != nb_cores) {
@@ -157,21 +144,27 @@ int main(int argc, char *argv[]) {
   }
 
   std::vector<port_context> contexts;
+
+  // Make sure we launch on main last.
+
+  std::vector<unsigned> available_lcores;
+  unsigned lcore_id;
+  RTE_LCORE_FOREACH(lcore_id) {
+    if (lcore_id != rte_lcore_id()) {
+      available_lcores.push_back(lcore_id);
+    }
+  }
+  available_lcores.push_back(rte_lcore_id());
+  int next_lcore_in_list = 0;
+
   std::vector<unsigned> lcore_assignment;
-  unsigned next_lcore = rte_get_next_lcore(-1, 0, 0);
 
   for (int i = 0; i < nb_ports; i++) {
     contexts.emplace_back(parsed_args->mode, rte_ports_matched[i],
                           parsed_args->nb_txq, parsed_args->nb_rxq);
     lcore_assignment.clear();
     for (int j = 0; j < cores_per_port; j++) {
-      if (next_lcore == rte_lcore_id()) {
-        // Can't use the main lcore.
-        next_lcore = rte_get_next_lcore(next_lcore, 0, 0);
-      }
-      assert(next_lcore != RTE_MAX_LCORE);
-      lcore_assignment.push_back(next_lcore);
-      next_lcore = rte_get_next_lcore(next_lcore, 0, 0);
+      lcore_assignment.push_back(available_lcores.at(next_lcore_in_list++));
     }
     contexts.back().assign_lcores(lcore_assignment);
   }

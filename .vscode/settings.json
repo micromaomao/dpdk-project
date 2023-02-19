@@ -6,6 +6,7 @@
   "files.associations": {
     "*.json": "jsonc",
     "cstdint": "cpp",
-    "algorithm": "cpp"
+    "algorithm": "cpp",
+    "vector": "cpp"
   }
 }
