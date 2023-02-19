@@ -33,10 +33,10 @@ add_custom_command(
   DEPENDS ${RUST_SOURCES}
 )
 
-if(CMAKE_BUILD_TYPE STREQUAL "Debug")
-  set(RUST_TARGET_DIR ${RUST_TARGET_DEBUG_DIR})
-else()
+if(CMAKE_BUILD_TYPE STREQUAL "Release")
   set(RUST_TARGET_DIR ${RUST_TARGET_RELEASE_DIR})
+else()
+  set(RUST_TARGET_DIR ${RUST_TARGET_DEBUG_DIR})
 endif()
 
 add_custom_target(rust
@@ -44,6 +44,7 @@ add_custom_target(rust
   DEPENDS ${RUST_TARGET_DIR}/libdpdk_project.a
 )
 
-set(RUST_LIBRARY ${RUST_TARGET_DIR}/libdpdk_project.a)
+# https://stackoverflow.com/a/63620069/4013790
+set(RUST_LIBRARY ${RUST_TARGET_DIR}/libdpdk_project.a pthread dl)
 
 target_link_libraries(dpdkproj PkgConfig::DPDK ${RUST_LIBRARY})

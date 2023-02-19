@@ -1,4 +1,2 @@
-#[no_mangle]
-pub extern fn test() -> i32 {
-  42
-}
+mod cmdargs;
+mod misc_types;
