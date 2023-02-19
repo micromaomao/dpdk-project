@@ -17,30 +17,14 @@ extern "C" {
 #include <vector>
 
 #include "bindings.h"
+#include "consts.hpp"
+#include "context.hpp"
+#include "main.hpp"
 
-static const int RX_RING_SIZE = 1024;
-static const int TX_RING_SIZE = 1024;
-static const int NUM_MBUFS = 8191;
-static const int MBUF_CACHE_SIZE = 250;
-static const int BURST_SIZE = 32;
-
-struct port_context;
-struct lcore_context {
-  const port_context *port_ctx;
-  struct rte_mempool *mbuf_pool;
-  unsigned pool_size;
-  unsigned rte_lcore_id;
-  int rx_qid, tx_qid;
-
-  lcore_context(const port_context *port_ctx, struct rte_mempool *mbuf_pool,
-                unsigned pool_size, unsigned rte_lcore_id)
-      : port_ctx(port_ctx), mbuf_pool(mbuf_pool), pool_size(pool_size),
-        rte_lcore_id(rte_lcore_id), rx_qid(-1), tx_qid(-1) {}
-};
-
-static __rte_noreturn int lcore_main_reflect(void *arg) {
+__rte_noreturn int lcore_main_reflect(void *arg) {
   lcore_context *lcore_ctx = (lcore_context *)arg;
-  uint16_t port = lcore_ctx->rte_lcore_id;
+  uint16_t port = lcore_ctx->port_ctx->rte_port_id;
+  assert(lcore_ctx->port_ctx->rte_port_started);
 
   while (true) {
     /* Get burst of RX packets */
@@ -61,197 +45,6 @@ static __rte_noreturn int lcore_main_reflect(void *arg) {
     }
   }
 }
-
-/**
- * A context object for a specific port, which will manage resources like
- * mbuf_pool for individual cores, which core are assigned to which port, etc.
- */
-struct port_context {
-  DPRunMode mode;
-  uint16_t rte_port_id;
-  uint32_t txq, rxq;
-  bool rte_port_started;
-  struct rte_ether_addr mac_addr;
-  struct rte_eth_dev_info dev_info;
-  std::vector<lcore_context> lcore_contexts;
-
-  bool ip4_checksum_offload;
-  bool udp_checksum_offload;
-
-  port_context(DPRunMode mode, uint16_t rte_port_id, uint32_t txq, uint32_t rxq)
-      : mode(mode), rte_port_id(rte_port_id), txq(txq), rxq(rxq),
-        rte_port_started(false), ip4_checksum_offload(false) {
-    if (rte_eth_macaddr_get(rte_port_id, &mac_addr) != 0) {
-      rte_exit(EXIT_FAILURE, "Cannot get MAC address for port %u\n",
-               rte_port_id);
-    }
-
-    int port_socket_id = rte_eth_dev_socket_id(rte_port_id);
-
-    int ret = rte_eth_dev_info_get(rte_port_id, &dev_info);
-    if (ret != 0) {
-      rte_exit(EXIT_FAILURE, "Error getting info for port %u: %s\n",
-               rte_port_id, strerror(-ret));
-    }
-
-    if (dev_info.max_tx_queues < txq) {
-      rte_exit(EXIT_FAILURE, "Port %u support a maximum of %u tx queues\n",
-               rte_port_id, dev_info.max_tx_queues);
-    }
-    if (dev_info.max_rx_queues < rxq) {
-      rte_exit(EXIT_FAILURE, "Port %u support a maximum of %u rx queues\n",
-               rte_port_id, dev_info.max_rx_queues);
-    }
-  }
-
-  ~port_context() {
-    if (rte_port_started) {
-      if (rte_eth_dev_stop(rte_port_id)) {
-        fprintf(stderr, "Failed to stop rte port %u\n", rte_port_id);
-      }
-    }
-    for (auto &lcore_ctx : lcore_contexts) {
-      if (lcore_ctx.mbuf_pool) {
-        rte_mempool_free(lcore_ctx.mbuf_pool);
-        lcore_ctx.mbuf_pool = nullptr;
-      }
-    }
-  }
-
-  void assign_lcores(const std::vector<unsigned> &lcores) {
-    int port_socket_id = rte_eth_dev_socket_id(rte_port_id);
-
-    if (port_socket_id <= 0) {
-      fprintf(stderr, "WARNING: port %u socket id could not be determined.\n",
-              rte_port_id);
-    }
-
-    for (unsigned lcore : lcores) {
-      int lcore_socket = rte_lcore_to_socket_id(lcore);
-      if (lcore_socket != port_socket_id) {
-        fprintf(stderr,
-                "WARNING: port %u is on remote NUMA node to "
-                "lcore %u.\n",
-                rte_port_id, lcore);
-      }
-      char name[RTE_MEMPOOL_NAMESIZE];
-      snprintf(name, sizeof(name), "mbuf_pool_lc%u", lcore);
-      unsigned pool_size = NUM_MBUFS;
-      rte_mempool *mbuf_pool =
-          rte_pktmbuf_pool_create(name, pool_size, MBUF_CACHE_SIZE, 0,
-                                  RTE_MBUF_DEFAULT_BUF_SIZE, lcore_socket);
-      if (!mbuf_pool) {
-        rte_exit(EXIT_FAILURE, "Cannot create mbuf pool for lcore %u\n", lcore);
-      }
-
-      lcore_contexts.emplace_back(this, mbuf_pool, pool_size, lcore);
-    }
-  }
-
-  bool config_port() {
-    assert(!rte_port_started);
-    struct rte_eth_conf port_conf;
-
-    memset(&port_conf, 0, sizeof(struct rte_eth_conf));
-
-    if (dev_info.tx_offload_capa & RTE_ETH_TX_OFFLOAD_MBUF_FAST_FREE) {
-      port_conf.txmode.offloads |= RTE_ETH_TX_OFFLOAD_MBUF_FAST_FREE;
-    }
-    if (dev_info.tx_offload_capa & RTE_ETH_TX_OFFLOAD_IPV4_CKSUM) {
-      port_conf.txmode.offloads |= RTE_ETH_TX_OFFLOAD_IPV4_CKSUM;
-      ip4_checksum_offload = true;
-    }
-    if (dev_info.tx_offload_capa & RTE_ETH_TX_OFFLOAD_UDP_CKSUM) {
-      port_conf.txmode.offloads |= RTE_ETH_TX_OFFLOAD_UDP_CKSUM;
-      udp_checksum_offload = true;
-    }
-
-    struct rte_eth_txconf txconf = dev_info.default_txconf;
-    txconf.offloads = port_conf.txmode.offloads;
-
-    int retval = rte_eth_dev_configure(rte_port_id, rxq, txq, &port_conf);
-    if (retval != 0)
-      return retval;
-
-    int rxq_idx = 0, txq_idx = 0;
-
-    for (auto &lcore_ctx : lcore_contexts) {
-      uint16_t nb_rxd = RX_RING_SIZE;
-      uint16_t nb_txd = TX_RING_SIZE;
-      retval = rte_eth_dev_adjust_nb_rx_tx_desc(rte_port_id, &nb_rxd, &nb_txd);
-      if (retval != 0) {
-        fprintf(
-            stderr,
-            "Failed to call rte_eth_dev_adjust_nb_rx_tx_desc(port=%d): %s\n",
-            rte_port_id, strerror(-retval));
-        return false;
-      }
-
-      // TODO: check this->mode
-
-      retval =
-          rte_eth_rx_queue_setup(rte_port_id, rxq_idx, nb_rxd,
-                                 rte_lcore_to_socket_id(lcore_ctx.rte_lcore_id),
-                                 NULL, lcore_ctx.mbuf_pool);
-      if (retval < 0) {
-        fprintf(
-            stderr,
-            "Failed to call rte_eth_rx_queue_setup(port=%d, queue=%d): %s\n",
-            rte_port_id, rxq_idx, strerror(-retval));
-        return false;
-      }
-      lcore_ctx.rx_qid = rxq_idx;
-      rxq_idx += 1;
-
-      retval = rte_eth_tx_queue_setup(
-          rte_port_id, txq_idx, nb_txd,
-          rte_lcore_to_socket_id(lcore_ctx.rte_lcore_id), &txconf);
-      if (retval < 0) {
-        fprintf(
-            stderr,
-            "Failed to call rte_eth_tx_queue_setup(port=%d, queue=%d): %s\n",
-            rte_port_id, txq_idx, strerror(-retval));
-        return false;
-      }
-      lcore_ctx.tx_qid = txq_idx;
-      txq_idx += 1;
-    }
-
-    retval = rte_eth_dev_start(rte_port_id);
-    if (retval < 0) {
-      fprintf(stderr, "Failed to start port %d: %s\n", rte_port_id,
-              strerror(-retval));
-      return false;
-    }
-
-    rte_port_started = true;
-
-    // rte_eth_promiscuous_enable(rte_port_id);
-
-    return true;
-  }
-
-  bool start() {
-    if (mode == DPRunMode::Reflect) {
-      for (auto &lcore_ctx : lcore_contexts) {
-        assert(lcore_ctx.rx_qid != -1 && lcore_ctx.tx_qid != -1);
-        if (lcore_ctx.rte_lcore_id == rte_lcore_id()) {
-          lcore_main_reflect(&lcore_ctx);
-        } else {
-          rte_eal_remote_launch(&lcore_main_reflect, &lcore_ctx,
-                                lcore_ctx.rte_lcore_id);
-        }
-      }
-      return true;
-    } else if (mode == DPRunMode::SendRecv) {
-      fprintf(stderr, "Unimplemented\n");
-      return false;
-    } else {
-      assert(false);
-      return false;
-    }
-  }
-};
 
 /*
  * The main function, which does initialization and calls the per-lcore
@@ -334,10 +127,7 @@ int main(int argc, char *argv[]) {
 
   printf("Found %d ports to use.\n", nb_ports);
 
-  int expected_nb_cores =
-      nb_ports * (parsed_args->nb_rxq + parsed_args->nb_txq);
-
-  // In reflect mode, one core uses both the rx and tx queue.
+  int cores_per_port = parsed_args->nb_rxq + parsed_args->nb_txq;
   if (parsed_args->mode == DPRunMode::Reflect) {
     if (parsed_args->nb_rxq != parsed_args->nb_txq) {
       fprintf(stderr,
@@ -345,8 +135,11 @@ int main(int argc, char *argv[]) {
               "number of tx queues.\n");
       exit(1);
     }
-    expected_nb_cores = nb_ports * parsed_args->nb_rxq;
+    // In reflect mode, one core uses both the rx and tx queue.
+    cores_per_port = parsed_args->nb_rxq;
   }
+
+  int expected_nb_cores = nb_ports * cores_per_port;
 
   int nb_cores = rte_lcore_count();
   if (expected_nb_cores != nb_cores) {
@@ -358,10 +151,19 @@ int main(int argc, char *argv[]) {
   }
 
   std::vector<port_context> contexts;
+  std::vector<unsigned> lcore_assignment;
+  unsigned next_lcore = rte_get_next_lcore(-1, 0, 0);
 
   for (int i = 0; i < nb_ports; i++) {
     contexts.emplace_back(parsed_args->mode, rte_ports_matched[i],
                           parsed_args->nb_txq, parsed_args->nb_rxq);
+    lcore_assignment.clear();
+    for (int j = 0; j < cores_per_port; j++) {
+      assert(next_lcore != RTE_MAX_LCORE);
+      lcore_assignment.push_back(next_lcore);
+      next_lcore = rte_get_next_lcore(next_lcore, 0, 0);
+    }
+    contexts.back().assign_lcores(lcore_assignment);
   }
 
   dp_free_args(parsed_args);

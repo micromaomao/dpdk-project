@@ -2,5 +2,10 @@
   "editor.formatOnSave": true,
   "rust-analyzer.linkedProjects": [
     "rust/Cargo.toml"
-  ]
+  ],
+  "files.associations": {
+    "*.json": "jsonc",
+    "cstdint": "cpp",
+    "algorithm": "cpp"
+  }
 }
