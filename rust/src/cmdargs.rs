@@ -4,15 +4,26 @@ use std::ffi;
 use std::ptr;
 use std::time::Duration;
 
-use crate::misc_types::{parse_mac, EtherAddr};
+use crate::misc_types::parse_ip4;
+use crate::misc_types::parse_ip4_and_port;
+use crate::misc_types::{parse_mac, EtherAddr, Ip4Addr};
 use crate::stats::get_time_value_from_duration;
 use crate::stats::StatsAggregator;
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(C)]
 pub enum DPRunMode {
   Reflect = 1,
   SendRecv = 2,
+}
+
+#[derive(Debug)]
+pub struct SendConfig {
+  pub source_ip: Ip4Addr,
+  pub source_port_range: (u16, u16),
+  pub dest_mac: EtherAddr,
+  pub dest_ip: Ip4Addr,
+  pub dest_port: u16,
 }
 
 #[derive(Debug)]
@@ -22,6 +33,11 @@ pub struct DPCmdArgs {
 
   pub ports: *mut EtherAddr,
   pub nb_ports: u32,
+
+  pub packet_size: u32,
+
+  /// Opaque from C
+  pub send_config: *mut SendConfig,
 
   pub nb_rxq: u32,
   pub nb_txq: u32,
@@ -92,6 +108,17 @@ pub unsafe extern "C" fn dp_parse_args(
       arg!(--"stats-evict-threshold-secs" <secs> "On each stats dump, stats older than this many seconds will be dumped.")
         .default_value("10")
         .value_parser(clap::value_parser!(u64).range(1..)),
+      arg!(--"packet-size" <bytes> "Size of packets to send")
+        .default_value("1000")
+        .value_parser(clap::value_parser!(u32).range(1..)),
+      arg!(--src <ip> "Source IP address for sendrecv mode")
+        .required_if_eq("mode", "sendrecv"),
+      arg!(--"src-port-range" <port_range> "Source port range for sendrecv mode. Each packet may be sent from any port within this range.")
+        .default_value("10000-11000"),
+      arg!(--dest <ipport> "Destination address for sendrecv mode (ip:port)")
+        .required_if_eq("mode", "sendrecv"),
+      arg!(--dest-mac <mac> "Destination MAC address for sendrecv mode. This is required because we don't currently implement ARP.")
+        .required_if_eq("mode", "sendrecv"),
     ])
     .get_matches_from(&argv);
 
@@ -105,6 +132,8 @@ pub unsafe extern "C" fn dp_parse_args(
     nb_ports: 0,
     nb_rxq: *matches.get_one::<u32>("rxq").unwrap(),
     nb_txq: *matches.get_one::<u32>("txq").unwrap(),
+    packet_size: *matches.get_one::<u32>("packet-size").unwrap(),
+    send_config: ptr::null_mut(),
     stats: Box::into_raw(Box::new(make_stats_aggregator_from_arg(&matches))),
   };
 
@@ -121,6 +150,38 @@ pub unsafe extern "C" fn dp_parse_args(
     parsed_args.nb_ports = ports.len() as u32;
   }
 
+  if parsed_args.mode == DPRunMode::SendRecv {
+    let (dest_ip, dest_port) =
+      parse_ip4_and_port(matches.get_one::<String>("dest").unwrap().as_str())
+        .expect("Invalid destination address");
+    parsed_args.send_config = Box::into_raw(Box::new(SendConfig {
+      source_ip: parse_ip4(matches.get_one::<String>("src").unwrap().as_str())
+        .expect("Invalid source IP address"),
+      source_port_range: {
+        let s = matches.get_one::<String>("src-port-range").unwrap();
+        let mut split = s.split('-');
+        let start = split
+          .next()
+          .unwrap()
+          .parse::<u16>()
+          .expect("Invalid source port range");
+        if let Some(end) = split.next() {
+          let end = end.parse::<u16>().expect("Invalid source port range");
+          if end < start {
+            panic!("Invalid source port range");
+          }
+          (start, end)
+        } else {
+          (start, start)
+        }
+      },
+      dest_ip,
+      dest_port,
+      dest_mac: parse_mac(matches.get_one::<String>("dest-mac").unwrap().as_str())
+        .expect("Invalid destination MAC address"),
+    }))
+  }
+
   Box::into_raw(Box::new(parsed_args))
 }
 
@@ -135,5 +196,8 @@ pub unsafe extern "C" fn dp_free_args(args: *mut DPCmdArgs) {
   }
   if !arg.stats.is_null() {
     drop(Box::from_raw(arg.stats));
+  }
+  if !arg.send_config.is_null() {
+    drop(Box::from_raw(arg.send_config));
   }
 }
