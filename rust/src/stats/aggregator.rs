@@ -13,7 +13,6 @@
 //! The unit of the time values provided to this module can be arbitrary.
 
 use std::{
-  collections::VecDeque,
   sync::{atomic::AtomicU64, RwLock},
 };
 
@@ -39,7 +38,7 @@ struct LockedPart {
   first_step_idx: usize,
 
   /// The steps buffer.
-  steps_buf: VecDeque<Stats>,
+  steps_buf: Vec<Stats>,
 }
 
 /// Aggregated statistics for a single step.
@@ -80,16 +79,18 @@ impl StatsAggregator {
     stats_writer: Option<impl Fn(u64, &Stats) + Sync + 'static>,
   ) -> Self {
     let max_steps = (keep_time / step_size + 1) as usize;
-    Self {
+    let s = Self {
       step_size,
       max_steps,
       evict_threshold,
       locked_part: RwLock::new(LockedPart {
         first_step_idx: 0,
-        steps_buf: VecDeque::with_capacity(max_steps),
+        steps_buf: Vec::with_capacity(max_steps),
       }),
       stats_writer: stats_writer.map(|f| Box::new(f) as _),
-    }
+    };
+    s.locked_part.write().unwrap().steps_buf.resize_with(max_steps, Default::default);
+    s
   }
 
   /// Use a callback to access the statistics for a given step, allowing
@@ -102,39 +103,31 @@ impl StatsAggregator {
   pub fn access_step(&self, time: u64, f: impl FnOnce(&Stats)) -> bool {
     let step: usize = (time / self.step_size).try_into().unwrap();
     let read_lock = self.locked_part.read().unwrap();
+    debug_assert_eq!(read_lock.steps_buf.len(), self.max_steps);
     if step < read_lock.first_step_idx {
       return false;
     }
     let step_buf_idx = step - read_lock.first_step_idx;
-    if step_buf_idx >= read_lock.steps_buf.len() {
+    if step_buf_idx >= self.max_steps {
       drop(read_lock);
       let mut write_lock = self.locked_part.write().unwrap();
 
       // Evict any steps that are too old.
-      while time.saturating_sub(self.evict_threshold) > write_lock.first_step_idx as u64 * self.step_size {
-        if let Some(s) = write_lock.steps_buf.pop_front() {
-          if let Some(stats_writer) = &self.stats_writer {
-            stats_writer(write_lock.first_step_idx as u64 * self.step_size, &s);
-          }
-          write_lock.first_step_idx += 1;
-        } else {
-          // The queue is completely empty, so we can just reset the first step index.
-          write_lock.first_step_idx = step;
-          break;
+      let mut front_ptr = 0usize;
+      let locked_part = &mut *write_lock;
+      let first_step_idx = &mut locked_part.first_step_idx;
+      let buf = &mut locked_part.steps_buf;
+      while time.saturating_sub(self.evict_threshold) > *first_step_idx as u64 * self.step_size && front_ptr < self.max_steps {
+        let s = &buf[front_ptr];
+        if let Some(stats_writer) = &self.stats_writer {
+          stats_writer(*first_step_idx as u64 * self.step_size, &s);
         }
+        *first_step_idx += 1;
+        front_ptr += 1;
       }
 
-      // Now insert the new step, if it does not exist.  (Due to the
-      // pre-allocation, this is really just a memset 0)
-      while write_lock.first_step_idx + write_lock.steps_buf.len() <= step {
-        write_lock.steps_buf.push_back(Default::default());
-        if write_lock.steps_buf.len() > self.max_steps {
-          // This suggest that max_steps is too small to hold even a single new
-          // step after eviction. Either it is too small, or the eviction
-          // threshold is too large.  At this point let's just panic.
-          panic!("max_steps is too small to hold new steps after eviction");
-        }
-      }
+      drop(buf.drain(..front_ptr));
+      buf.resize_with(self.max_steps, Default::default);
 
       f(&write_lock.steps_buf[step - write_lock.first_step_idx]);
       true

@@ -330,7 +330,7 @@ int main(int argc, char *argv[]) {
   std::vector<port_context> contexts;
   // TODO: get this from cmd args
   StatsAggregator *stats_agg =
-      dp_new_stats_aggregator(1000, 1000, 1000, "/dev/stdout");
+      dp_new_stats_aggregator(100, 60000, 10000, "/dev/stdout");
   RustInstant *start_time = dp_get_reference_time();
 
   // Make sure we launch on main last.
