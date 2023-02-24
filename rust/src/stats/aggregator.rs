@@ -126,10 +126,16 @@ impl StatsAggregator {
         front_ptr += 1;
       }
 
+      if front_ptr == self.max_steps {
+        // Jump ahead, to avoid steps still being outside buf even when we
+        // evicted everything.
+        *first_step_idx = step;
+      }
+
       drop(buf.drain(..front_ptr));
       buf.resize_with(self.max_steps, Default::default);
 
-      f(&write_lock.steps_buf[step - write_lock.first_step_idx]);
+      f(&buf[step - *first_step_idx]);
       true
     } else {
       f(&read_lock.steps_buf[step_buf_idx]);
