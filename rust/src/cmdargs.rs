@@ -1,8 +1,12 @@
+use clap::arg;
+use clap::ArgMatches;
 use std::ffi;
 use std::ptr;
-use clap::arg;
+use std::time::Duration;
 
 use crate::misc_types::{parse_mac, EtherAddr};
+use crate::stats::get_time_value_from_duration;
+use crate::stats::StatsAggregator;
 
 #[derive(Debug)]
 #[repr(C)]
@@ -21,6 +25,33 @@ pub struct DPCmdArgs {
 
   pub nb_rxq: u32,
   pub nb_txq: u32,
+
+  pub stats: *mut StatsAggregator,
+}
+
+fn make_stats_aggregator_from_arg(arg: &ArgMatches) -> StatsAggregator {
+  let stats_file = &arg.get_one::<String>("stats-file");
+  let writer;
+  if let Some(stats_file) = stats_file {
+    writer = Some(
+      crate::stats::get_csv_writer(stats_file).expect("Unable to open stats file for writing"),
+    );
+  } else {
+    writer = None;
+  }
+  let stats = StatsAggregator::new(
+    get_time_value_from_duration(Duration::from_millis(
+      *arg.get_one::<u64>("stats-interval-ms").unwrap(),
+    )),
+    get_time_value_from_duration(Duration::from_secs(
+      *arg.get_one::<u64>("stats-evict-interval-secs").unwrap(),
+    )),
+    get_time_value_from_duration(Duration::from_secs(
+      *arg.get_one::<u64>("stats-evict-threshold-secs").unwrap(),
+    )),
+    writer,
+  );
+  stats
 }
 
 #[no_mangle]
@@ -40,15 +71,27 @@ pub unsafe extern "C" fn dp_parse_args(
     .version(env!("CARGO_PKG_VERSION"))
     .args([
       arg!(<mode> "Run mode, either 'reflect' or 'sendrecv'").required(true),
-      arg!(-p --ports <ports> ...
+      arg!(-p --ports <mac> ...
           "Specify which ports to use (defaults to all ports discoverable), in the form of
-           MAC addresses. This can be specified multiple times."),
-      arg!(-r <rxq> "Number of receive queues per port (default: 1)")
+           MAC addresses. This can be specified multiple times.")
+        .required(true),
+      arg!(-r --rxq <number> "Number of receive queues per port (default: 1)")
         .default_value("1")
         .value_parser(clap::value_parser!(u32)),
-      arg!(-t <txq> "Number of transmit queues per port (default: 1)")
+      arg!(-t --txq <number> "Number of transmit queues per port (default: 1)")
         .default_value("1")
         .value_parser(clap::value_parser!(u32)),
+      arg!(-s --"stats-file" <file> "Output packet stats to CSV.")
+        .required(false),
+      arg!(-i --"stats-interval-ms" <millis> "Interval in milliseconds between stat steps.")
+        .default_value("100")
+        .value_parser(clap::value_parser!(u64).range(1..)),
+      arg!(--"stats-evict-interval-secs" <secs> "Number of seconds between stats dump.")
+        .default_value("60")
+        .value_parser(clap::value_parser!(u64).range(1..)),
+      arg!(--"stats-evict-threshold-secs" <secs> "On each stats dump, stats older than this many seconds will be dumped.")
+        .default_value("10")
+        .value_parser(clap::value_parser!(u64).range(1..)),
     ])
     .get_matches_from(&argv);
 
@@ -62,6 +105,7 @@ pub unsafe extern "C" fn dp_parse_args(
     nb_ports: 0,
     nb_rxq: *matches.get_one::<u32>("rxq").unwrap(),
     nb_txq: *matches.get_one::<u32>("txq").unwrap(),
+    stats: Box::into_raw(Box::new(make_stats_aggregator_from_arg(&matches))),
   };
 
   let ports = matches
@@ -88,5 +132,8 @@ pub unsafe extern "C" fn dp_free_args(args: *mut DPCmdArgs) {
       arg.ports,
       arg.nb_ports as usize,
     )));
+  }
+  if !arg.stats.is_null() {
+    drop(Box::from_raw(arg.stats));
   }
 }

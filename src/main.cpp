@@ -328,9 +328,7 @@ int main(int argc, char *argv[]) {
   }
 
   std::vector<port_context> contexts;
-  // TODO: get this from cmd args
-  StatsAggregator *stats_agg =
-      dp_new_stats_aggregator(100, 60000, 10000, "/dev/stdout");
+  StatsAggregator *stats_agg = parsed_args->stats;
   RustInstant *start_time = dp_get_reference_time();
 
   // Make sure we launch on main last.
@@ -358,9 +356,6 @@ int main(int argc, char *argv[]) {
     contexts.back().assign_lcores(lcore_assignment);
   }
 
-  dp_free_args(parsed_args);
-  parsed_args = nullptr;
-
   bool success = true;
 
   for (auto &ctx : contexts) {
@@ -384,9 +379,11 @@ int main(int argc, char *argv[]) {
   // Run context deallocators, which may free rte resources.
   contexts.clear();
 
-  dp_free_stats_aggregator(stats_agg);
   dp_free_reference_time(start_time);
   stats_agg = nullptr;
+
+  dp_free_args(parsed_args);
+  parsed_args = nullptr;
 
   rte_eal_cleanup();
 

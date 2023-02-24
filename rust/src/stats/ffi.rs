@@ -1,41 +1,13 @@
 //! Contains FFI bindings for the stats module, to be used in the DPDK project.
 
-use std::os::raw::c_char;
-use std::path::Path;
 use std::sync::atomic::Ordering;
-use std::{ffi::CStr, time::Instant};
+use std::time::Instant;
 
-use crate::stats::{csv_writer::get_csv_writer, StatsAggregator};
+use crate::stats::StatsAggregator;
 
-#[no_mangle]
-pub unsafe extern "C" fn dp_new_stats_aggregator(
-  step_size: u64,
-  keep_time: u64,
-  evict_threshold: u64,
-  csv_file_name: *const c_char,
-) -> *mut StatsAggregator {
-  let writer = Some(
-    get_csv_writer(Path::new(
-      CStr::from_ptr(csv_file_name)
-        .to_str()
-        .expect("Invalid path"),
-    ))
-    .expect("Failed to create CSV writer"),
-  );
-  Box::into_raw(Box::new(StatsAggregator::new(
-    step_size,
-    keep_time,
-    evict_threshold,
-    writer,
-  )))
-}
+use super::get_time_value_from_duration;
 
 pub struct RustInstant(Instant);
-
-#[no_mangle]
-pub unsafe extern "C" fn dp_free_stats_aggregator(aggregator: *mut StatsAggregator) {
-  drop(Box::from_raw(aggregator));
-}
 
 #[no_mangle]
 pub unsafe extern "C" fn dp_get_reference_time() -> *mut RustInstant {
@@ -44,7 +16,7 @@ pub unsafe extern "C" fn dp_get_reference_time() -> *mut RustInstant {
 
 #[no_mangle]
 pub unsafe extern "C" fn dp_get_time_value_since(reference: *mut RustInstant) -> u64 {
-  let time = reference.as_ref().unwrap().0.elapsed().as_millis();
+  let time = get_time_value_from_duration(reference.as_ref().unwrap().0.elapsed());
   time as u64
 }
 

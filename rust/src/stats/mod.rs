@@ -8,14 +8,17 @@ pub use csv_writer::*;
 
 pub mod ffi;
 
+#[inline]
 pub fn get_time_value(start: Instant, current: Instant) -> u64 {
   get_time_value_from_duration(current.duration_since(start))
 }
 
+#[inline]
 pub fn get_time_value_now(start: Instant) -> u64 {
   get_time_value(start, Instant::now())
 }
 
+#[inline]
 pub fn get_time_value_from_duration(dur: Duration) -> u64 {
   dur.as_millis() as u64
 }
