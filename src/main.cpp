@@ -157,9 +157,12 @@ __rte_noreturn int lcore_main_send(void *arg) {
       nb_pkts += 1;
     }
 
+    uint64_t idx_start =
+        idx_atomic.fetch_add(nb_pkts, std::memory_order_relaxed);
+
     for (int i = 0; i < nb_pkts; i += 1) {
       uint8_t *data = rte_pktmbuf_mtod(bufs[i], uint8_t *);
-      mk_args.index = idx_atomic++;
+      mk_args.index = idx_start++;
       mk_args.timestamp = time_val;
       size_t written_len = dp_make_packet(data, buf_size, &mk_args);
       assert(written_len <= buf_size);
