@@ -22,6 +22,9 @@ struct lcore_context {
 
   lcore_context(struct rte_mempool *mbuf_pool, unsigned pool_size,
                 unsigned rte_lcore_id);
+
+  bool is_send() const { return this->tx_qid != -1; }
+  bool is_recv() const { return this->rx_qid != -1; }
 };
 
 /**
@@ -38,12 +41,15 @@ struct port_context {
   std::vector<lcore_context> lcore_contexts;
   StatsAggregator *stats_aggregator;
   RustInstant *start_time;
+  SendConfig *send_config;
+  DPCmdArgs *cli_args;
 
   bool ip4_checksum_offload;
   bool udp_checksum_offload;
 
   port_context(DPRunMode mode, uint16_t rte_port_id, uint32_t txq, uint32_t rxq,
-               StatsAggregator *stats_aggregator, RustInstant *start_time);
+               StatsAggregator *stats_aggregator, RustInstant *start_time,
+               SendConfig *send_config, DPCmdArgs *cli_args);
   ~port_context();
   void assign_lcores(const std::vector<unsigned> &lcores);
   bool config_port();

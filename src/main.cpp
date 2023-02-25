@@ -128,22 +128,12 @@ __rte_noreturn int lcore_main_send(void *arg) {
   }
   assert(lcore_ctx->port_ctx->rte_port_started);
 
-  int payload_size = 1000; // TODO: make configurable
-  const int buf_size = RTE_MBUF_DEFAULT_BUF_SIZE;
+  int buf_size = lcore_ctx->port_ctx->cli_args->packet_size + 50;
 
   DpMakePacketArgs mk_args;
-  mk_args.pkt_size = payload_size;
+
   memcpy(&mk_args.src_mac, &lcore_ctx->port_ctx->mac_addr.addr_bytes, 6);
-  mk_args.dst_mac[0] = 0x12;
-  mk_args.dst_mac[1] = 0x34;
-  mk_args.dst_mac[2] = 0x56;
-  mk_args.dst_mac[3] = 0x78;
-  mk_args.dst_mac[4] = 0x9a;
-  mk_args.dst_mac[5] = 0xbc;
-  // FIXME
-
-  // TODO: src and dst IP and port
-
+  mk_args.send_config = lcore_ctx->port_ctx->send_config;
   mk_args.need_ip_checksum = !lcore_ctx->port_ctx->ip4_checksum_offload;
   mk_args.need_udp_checksum = !lcore_ctx->port_ctx->udp_checksum_offload;
 
@@ -199,8 +189,6 @@ __rte_noreturn int lcore_main_recv(void *arg) {
             port);
   }
   assert(lcore_ctx->port_ctx->rte_port_started);
-
-  int payload_size = 1000; // TODO: make configurable
 
   while (true) {
     struct rte_mbuf *bufs[BURST_SIZE] = {0};
@@ -348,7 +336,7 @@ int main(int argc, char *argv[]) {
   for (int i = 0; i < nb_ports; i++) {
     contexts.emplace_back(parsed_args->mode, rte_ports_matched[i],
                           parsed_args->nb_txq, parsed_args->nb_rxq, stats_agg,
-                          start_time);
+                          start_time, parsed_args->send_config, parsed_args);
     lcore_assignment.clear();
     for (int j = 0; j < cores_per_port; j++) {
       lcore_assignment.push_back(available_lcores.at(next_lcore_in_list++));

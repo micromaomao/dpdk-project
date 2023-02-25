@@ -24,6 +24,8 @@ pub struct SendConfig {
   pub dest_mac: EtherAddr,
   pub dest_ip: Ip4Addr,
   pub dest_port: u16,
+  pub seed: u64,
+  pub packet_size: u32,
 }
 
 #[derive(Debug)]
@@ -34,10 +36,11 @@ pub struct DPCmdArgs {
   pub ports: *mut EtherAddr,
   pub nb_ports: u32,
 
-  pub packet_size: u32,
-
-  /// Opaque from C
+  /// This is opaque from C
   pub send_config: *mut SendConfig,
+
+  /// A copy of the value in send_config to enable access from C
+  pub packet_size: u32,
 
   pub nb_rxq: u32,
   pub nb_txq: u32,
@@ -117,8 +120,11 @@ pub unsafe extern "C" fn dp_parse_args(
         .default_value("10000-11000"),
       arg!(--dest <ipport> "Destination address for sendrecv mode (ip:port)")
         .required_if_eq("mode", "sendrecv"),
-      arg!(--dest-mac <mac> "Destination MAC address for sendrecv mode. This is required because we don't currently implement ARP.")
+      arg!(--"dest-mac" <mac> "Destination MAC address for sendrecv mode. This is required because we don't currently implement ARP.")
         .required_if_eq("mode", "sendrecv"),
+      arg!(--seed <seed> "Seed for sendrecv mode, 64 bit positive integer")
+        .default_value("4107683144946382073")
+        .value_parser(clap::value_parser!(u64)),
     ])
     .get_matches_from(&argv);
 
@@ -179,6 +185,8 @@ pub unsafe extern "C" fn dp_parse_args(
       dest_port,
       dest_mac: parse_mac(matches.get_one::<String>("dest-mac").unwrap().as_str())
         .expect("Invalid destination MAC address"),
+      seed: *matches.get_one::<u64>("seed").unwrap(),
+      packet_size: parsed_args.packet_size,
     }))
   }
 

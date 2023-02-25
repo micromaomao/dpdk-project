@@ -1,6 +1,7 @@
 mod cmdargs;
 mod misc_types;
 mod stats;
+mod pkt;
 
 use cmdargs::SendConfig;
 use etherparse::{EtherType, Ethernet2Header, IpNumber, Ipv4Header, UdpHeader};
@@ -13,6 +14,14 @@ macro_rules! unwrap {
       Ok(val) => val,
       Err(_) => {
         return false;
+      }
+    }
+  };
+  ($val:expr, $falseret:expr) => {
+    match $val {
+      Ok(val) => val,
+      Err(_) => {
+        return $falseret;
       }
     }
   };
@@ -56,7 +65,6 @@ pub unsafe extern "C" fn dp_process_reflect_pkt(
 
 #[repr(C)]
 pub struct DpMakePacketArgs {
-  pub pkt_size: u32,
   pub src_mac: EtherAddr,
   pub send_config: *const SendConfig,
   pub index: u64,
@@ -81,10 +89,11 @@ pub unsafe extern "C" fn dp_make_packet(
   _ = eth_hdr.write(&mut pkt_buf);
 
   const UDP_HDR_LEN: u16 = 8;
-  debug_assert!(args.pkt_size < u16::MAX as u32 - UDP_HDR_LEN as u32);
+  let usr_payload_size = send_config.packet_size;
+  debug_assert!(usr_payload_size < u16::MAX as u32 - UDP_HDR_LEN as u32);
 
   let mut ip_hdr = Ipv4Header::new(
-    args.pkt_size as u16 + UDP_HDR_LEN,
+    usr_payload_size as u16 + UDP_HDR_LEN,
     64,
     IpNumber::Udp as u8,
     send_config.source_ip,
@@ -92,9 +101,10 @@ pub unsafe extern "C" fn dp_make_packet(
   );
 
   if args.need_ip_checksum {
-    ip_hdr.header_checksum = unwrap!(ip_hdr.calc_header_checksum());
+    ip_hdr.header_checksum = unwrap!(ip_hdr.calc_header_checksum(), 0);
   }
   _ = ip_hdr.write(&mut pkt_buf);
+  pkt_buf = &mut pkt_buf[..ip_hdr.payload_len as usize];
 
   let (sp_start, sp_end) = send_config.source_port_range;
   let source_port = sp_start + (args.index % (sp_end as u64 - sp_start as u64 + 1)) as u16;
@@ -106,13 +116,13 @@ pub unsafe extern "C" fn dp_make_packet(
   };
 
   let payload = &mut pkt_buf[UDP_HDR_LEN as usize..];
-  debug_assert!(payload.len() >= args.pkt_size as usize);
-  // TODO: fill payload
+  debug_assert_eq!(payload.len(), usr_payload_size as usize);
+  pkt::write_packet(send_config.seed, args.index, args.timestamp, payload);
 
   if args.need_udp_checksum {
-    udp_hdr.checksum = unwrap!(udp_hdr.calc_checksum_ipv4(&ip_hdr, &payload));
+    udp_hdr.checksum = unwrap!(udp_hdr.calc_checksum_ipv4(&ip_hdr, &payload), 0);
   }
   pkt_buf[..UDP_HDR_LEN as usize].copy_from_slice(&udp_hdr.to_bytes());
 
-  unimplemented!()
+  eth_hdr.header_len() as usize + ip_hdr.total_len() as usize
 }

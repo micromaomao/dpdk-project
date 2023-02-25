@@ -12,10 +12,12 @@ lcore_context::lcore_context(struct rte_mempool *mbuf_pool, unsigned pool_size,
 
 port_context::port_context(DPRunMode mode, uint16_t rte_port_id, uint32_t txq,
                            uint32_t rxq, StatsAggregator *stats_aggregator,
-                           RustInstant *start_time)
+                           RustInstant *start_time, SendConfig *send_config,
+                           DPCmdArgs *cli_args)
     : mode(mode), rte_port_id(rte_port_id), txq(txq), rxq(rxq),
       rte_port_started(false), ip4_checksum_offload(false),
-      stats_aggregator(stats_aggregator), start_time(start_time) {
+      stats_aggregator(stats_aggregator), start_time(start_time),
+      send_config(send_config), cli_args(cli_args) {
   if (rte_eth_macaddr_get(rte_port_id, &mac_addr) != 0) {
     rte_exit(EXIT_FAILURE, "Cannot get MAC address for port %u\n", rte_port_id);
   }
@@ -121,36 +123,45 @@ bool port_context::config_port() {
       return false;
     }
 
-    // TODO: check this->mode
+    bool should_have_rxq =
+        this->mode == DPRunMode::Reflect || rxq_idx < this->rxq;
+    bool should_have_txq =
+        this->mode == DPRunMode::Reflect || rxq_idx >= this->rxq;
 
-    retval =
-        rte_eth_rx_queue_setup(rte_port_id, rxq_idx, nb_rxd,
-                               rte_lcore_to_socket_id(lcore_ctx.rte_lcore_id),
-                               NULL, lcore_ctx.mbuf_pool);
-    if (retval < 0) {
-      fprintf(stderr,
-              "Failed to call rte_eth_rx_queue_setup(port=%d, queue=%d): %s\n",
-              rte_port_id, rxq_idx, strerror(-retval));
-      return false;
+    if (should_have_rxq) {
+      retval =
+          rte_eth_rx_queue_setup(rte_port_id, rxq_idx, nb_rxd,
+                                 rte_lcore_to_socket_id(lcore_ctx.rte_lcore_id),
+                                 NULL, lcore_ctx.mbuf_pool);
+      if (retval < 0) {
+        fprintf(
+            stderr,
+            "Failed to call rte_eth_rx_queue_setup(port=%d, queue=%d): %s\n",
+            rte_port_id, rxq_idx, strerror(-retval));
+        return false;
+      }
+      lcore_ctx.rx_qid = rxq_idx;
+      printf("Port %u: set up rx queue %d with %u descriptors\n", rte_port_id,
+             rxq_idx, nb_rxd);
+      rxq_idx += 1;
     }
-    lcore_ctx.rx_qid = rxq_idx;
-    printf("Port %u: set up rx queue %d with %u descriptors\n", rte_port_id,
-           rxq_idx, nb_rxd);
-    rxq_idx += 1;
 
-    retval = rte_eth_tx_queue_setup(
-        rte_port_id, txq_idx, nb_txd,
-        rte_lcore_to_socket_id(lcore_ctx.rte_lcore_id), &txconf);
-    if (retval < 0) {
-      fprintf(stderr,
-              "Failed to call rte_eth_tx_queue_setup(port=%d, queue=%d): %s\n",
-              rte_port_id, txq_idx, strerror(-retval));
-      return false;
+    if (should_have_txq) {
+      retval = rte_eth_tx_queue_setup(
+          rte_port_id, txq_idx, nb_txd,
+          rte_lcore_to_socket_id(lcore_ctx.rte_lcore_id), &txconf);
+      if (retval < 0) {
+        fprintf(
+            stderr,
+            "Failed to call rte_eth_tx_queue_setup(port=%d, queue=%d): %s\n",
+            rte_port_id, txq_idx, strerror(-retval));
+        return false;
+      }
+      lcore_ctx.tx_qid = txq_idx;
+      printf("Port %u: set up tx queue %d with %u descriptors\n", rte_port_id,
+             txq_idx, nb_txd);
+      txq_idx += 1;
     }
-    lcore_ctx.tx_qid = txq_idx;
-    printf("Port %u: set up tx queue %d with %u descriptors\n", rte_port_id,
-           txq_idx, nb_txd);
-    txq_idx += 1;
   }
 
   printf("Port %u: set up %d rx queues and %d tx queues\n", rte_port_id,
@@ -189,20 +200,28 @@ bool port_context::start() {
   bool success = true;
   assert(rte_port_started);
 
-  if (mode == DPRunMode::Reflect) {
-    for (auto &lcore_ctx : lcore_contexts) {
+  for (auto &lcore_ctx : lcore_contexts) {
+    lcore_ctx.port_ctx = this;
+
+    lcore_function_t *func = nullptr;
+    if (mode == DPRunMode::Reflect) {
       assert(lcore_ctx.rx_qid != -1 && lcore_ctx.tx_qid != -1);
-      lcore_ctx.port_ctx = this;
-      if (!launch_on(lcore_ctx.rte_lcore_id, &lcore_main_reflect, &lcore_ctx)) {
-        success = false;
+      func = lcore_main_reflect;
+    } else if (mode == DPRunMode::SendRecv) {
+      if (lcore_ctx.is_send()) {
+        func = lcore_main_send;
+        assert(!lcore_ctx.is_recv());
+      } else if (lcore_ctx.is_recv()) {
+        func = lcore_main_recv;
+      } else {
+        assert(false);
       }
+    } else {
+      assert(false);
     }
-  } else if (mode == DPRunMode::SendRecv) {
-    fprintf(stderr, "Unimplemented\n");
-    success = false;
-  } else {
-    assert(false);
-    success = false;
+    if (!launch_on(lcore_ctx.rte_lcore_id, func, &lcore_ctx)) {
+      success = false;
+    }
   }
 
   return success;
