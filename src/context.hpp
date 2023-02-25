@@ -10,11 +10,12 @@ extern "C" {
 }
 
 #include "bindings.h"
+#include <atomic>
 #include <vector>
 
 struct port_context;
 struct lcore_context {
-  const port_context *port_ctx;
+  port_context *port_ctx;
   struct rte_mempool *mbuf_pool;
   unsigned pool_size;
   unsigned rte_lcore_id;
@@ -47,9 +48,27 @@ struct port_context {
   bool ip4_checksum_offload;
   bool udp_checksum_offload;
 
+  std::atomic_int64_t tx_idx;
+
   port_context(DPRunMode mode, uint16_t rte_port_id, uint32_t txq, uint32_t rxq,
                StatsAggregator *stats_aggregator, RustInstant *start_time,
                SendConfig *send_config, DPCmdArgs *cli_args);
+
+  port_context(const port_context &) = delete;
+  port_context &operator=(const port_context &) = delete;
+
+  /// Needed because std::atomic is not movable
+  port_context(port_context &&other)
+      : mode(other.mode), rte_port_id(other.rte_port_id), txq(other.txq),
+        rxq(other.rxq), rte_port_started(other.rte_port_started),
+        mac_addr(other.mac_addr), dev_info(other.dev_info),
+        lcore_contexts(std::move(other.lcore_contexts)),
+        stats_aggregator(other.stats_aggregator), start_time(other.start_time),
+        send_config(other.send_config), cli_args(other.cli_args),
+        ip4_checksum_offload(other.ip4_checksum_offload),
+        udp_checksum_offload(other.udp_checksum_offload),
+        tx_idx(other.tx_idx.load()) {}
+
   ~port_context();
   void assign_lcores(const std::vector<unsigned> &lcores);
   bool config_port();

@@ -17,7 +17,7 @@ port_context::port_context(DPRunMode mode, uint16_t rte_port_id, uint32_t txq,
     : mode(mode), rte_port_id(rte_port_id), txq(txq), rxq(rxq),
       rte_port_started(false), ip4_checksum_offload(false),
       stats_aggregator(stats_aggregator), start_time(start_time),
-      send_config(send_config), cli_args(cli_args) {
+      send_config(send_config), cli_args(cli_args), tx_idx(0) {
   if (rte_eth_macaddr_get(rte_port_id, &mac_addr) != 0) {
     rte_exit(EXIT_FAILURE, "Cannot get MAC address for port %u\n", rte_port_id);
   }

@@ -137,6 +137,8 @@ __rte_noreturn int lcore_main_send(void *arg) {
   mk_args.need_ip_checksum = !lcore_ctx->port_ctx->ip4_checksum_offload;
   mk_args.need_udp_checksum = !lcore_ctx->port_ctx->udp_checksum_offload;
 
+  auto &idx_atomic = lcore_ctx->port_ctx->tx_idx;
+
   while (true) {
     struct rte_mbuf *bufs[BURST_SIZE] = {0};
     int nb_pkts = 0;
@@ -157,7 +159,7 @@ __rte_noreturn int lcore_main_send(void *arg) {
 
     for (int i = 0; i < nb_pkts; i += 1) {
       uint8_t *data = rte_pktmbuf_mtod(bufs[i], uint8_t *);
-      mk_args.index = 0;
+      mk_args.index = idx_atomic++;
       mk_args.timestamp = time_val;
       size_t written_len = dp_make_packet(data, buf_size, &mk_args);
       assert(written_len <= buf_size);
