@@ -41,6 +41,8 @@ pub struct DPCmdArgs {
 
   /// A copy of the value in send_config to enable access from C
   pub packet_size: u32,
+  /// A copy of the value in send_config to enable access from C
+  pub seed: u64,
 
   pub nb_rxq: u32,
   pub nb_txq: u32,
@@ -140,6 +142,7 @@ pub unsafe extern "C" fn dp_parse_args(
     nb_txq: *matches.get_one::<u32>("txq").unwrap(),
     packet_size: *matches.get_one::<u32>("packet-size").unwrap(),
     send_config: ptr::null_mut(),
+    seed: *matches.get_one::<u64>("seed").unwrap(),
     stats: Box::into_raw(Box::new(make_stats_aggregator_from_arg(&matches))),
   };
 
@@ -185,7 +188,7 @@ pub unsafe extern "C" fn dp_parse_args(
       dest_port,
       dest_mac: parse_mac(matches.get_one::<String>("dest-mac").unwrap().as_str())
         .expect("Invalid destination MAC address"),
-      seed: *matches.get_one::<u64>("seed").unwrap(),
+      seed: parsed_args.seed,
       packet_size: parsed_args.packet_size,
     }))
   }

@@ -1,7 +1,7 @@
 mod cmdargs;
 mod misc_types;
-mod stats;
 mod pkt;
+mod stats;
 
 use cmdargs::SendConfig;
 use etherparse::{EtherType, Ethernet2Header, IpNumber, Ipv4Header, UdpHeader};
@@ -125,4 +125,48 @@ pub unsafe extern "C" fn dp_make_packet(
   pkt_buf[..UDP_HDR_LEN as usize].copy_from_slice(&udp_hdr.to_bytes());
 
   eth_hdr.header_len() as usize + ip_hdr.total_len() as usize
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct ParsePacketRes {
+  pub ok: bool,
+  pub index: u64,
+  pub send_time: u64,
+}
+
+impl ParsePacketRes {
+  pub fn err() -> Self {
+    Self {
+      ok: false,
+      index: 0,
+      send_time: 0,
+    }
+  }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn dp_parse_packet(
+  pkt_buf: *const u8,
+  pkt_buf_sz: usize,
+  seed: u64,
+  expected_payload_size: usize,
+) -> ParsePacketRes {
+  debug_assert!(expected_payload_size >= pkt::PACKET_HEAD_SIZE);
+  let pkt = std::slice::from_raw_parts(pkt_buf, pkt_buf_sz);
+  let (_ether, pkt) = unwrap!(Ethernet2Header::from_slice(pkt), ParsePacketRes::err());
+  let (_ip, pkt) = unwrap!(Ipv4Header::from_slice(pkt), ParsePacketRes::err());
+  let (udp, _rest) = unwrap!(UdpHeader::from_slice(pkt), ParsePacketRes::err());
+  let pkt = &pkt[udp.header_len()..udp.length as usize];
+  if pkt.len() != expected_payload_size {
+    return ParsePacketRes::err();
+  }
+  match pkt::parse_packet(seed, pkt) {
+    Ok(pkt_hdr) => ParsePacketRes {
+      ok: true,
+      index: pkt_hdr.index,
+      send_time: pkt_hdr.send_time,
+    },
+    Err(_) => ParsePacketRes::err(),
+  }
 }

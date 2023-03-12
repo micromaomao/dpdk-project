@@ -143,8 +143,6 @@ __rte_noreturn int lcore_main_send(void *arg) {
     struct rte_mbuf *bufs[BURST_SIZE] = {0};
     int nb_pkts = 0;
 
-    uint64_t time_val = dp_get_time_value_since(start_time);
-
     for (int i = 0; i < BURST_SIZE; i += 1) {
       bufs[i] = rte_pktmbuf_alloc(lcore_ctx->mbuf_pool);
       if (!bufs[i]) {
@@ -159,6 +157,8 @@ __rte_noreturn int lcore_main_send(void *arg) {
 
     uint64_t idx_start =
         idx_atomic.fetch_add(nb_pkts, std::memory_order_relaxed);
+
+    uint64_t time_val = dp_get_time_value_since(start_time);
 
     for (int i = 0; i < nb_pkts; i += 1) {
       uint8_t *data = rte_pktmbuf_mtod(bufs[i], uint8_t *);
@@ -185,6 +185,8 @@ __rte_noreturn int lcore_main_recv(void *arg) {
   uint16_t port = lcore_ctx->port_ctx->rte_port_id;
   StatsAggregator *stats = lcore_ctx->port_ctx->stats_aggregator;
   RustInstant *start_time = lcore_ctx->port_ctx->start_time;
+  uint64_t seed = lcore_ctx->port_ctx->cli_args->seed;
+  size_t expected_payload_size = lcore_ctx->port_ctx->cli_args->packet_size;
 
   printf("Core %u receiving packets for port %u on rx queue %d\n",
          lcore_ctx->rte_lcore_id, port, lcore_ctx->rx_qid);
@@ -195,20 +197,43 @@ __rte_noreturn int lcore_main_recv(void *arg) {
   }
   assert(lcore_ctx->port_ctx->rte_port_started);
 
+  const uint32_t max_pkt_size = RTE_MBUF_DEFAULT_BUF_SIZE;
+  // To be used to concatenate the segments, if there are more than one.
+  char linear_buf[max_pkt_size];
+
+  bool debug_printed = false;
+
   while (true) {
     struct rte_mbuf *bufs[BURST_SIZE] = {0};
     int nb_rx = 0;
 
-    uint64_t time_val = dp_get_time_value_since(start_time);
-
     nb_rx = rte_eth_rx_burst(port, lcore_ctx->rx_qid, bufs, BURST_SIZE);
+    uint64_t time_val = dp_get_time_value_since(start_time);
 
     if (nb_rx == 0) {
       continue;
     }
 
     for (int i = 0; i < nb_rx; i++) {
-      // TODO: parse packet
+      uint32_t len = rte_pktmbuf_pkt_len(bufs[i]);
+      assert(len <= max_pkt_size);
+      const char *data =
+          (const char *)rte_pktmbuf_read(bufs[i], 0, len, linear_buf);
+      auto res = dp_parse_packet((const uint8_t *)data, len, seed,
+                                 expected_payload_size);
+      if (res.ok) {
+        uint64_t latency = 0;
+        if (res.send_time <= time_val) {
+          latency = time_val - res.send_time;
+          dp_stats_add(stats, res.send_time, 0, 0, 1, latency);
+        } else if (!debug_printed) {
+          printf("WARNING: Packet received with send time in the future\n");
+          debug_printed = true;
+        }
+      } else if (!debug_printed) {
+        printf("WARNING: Invalid packet received\n");
+        debug_printed = true;
+      }
       rte_pktmbuf_free(bufs[i]);
     }
 
