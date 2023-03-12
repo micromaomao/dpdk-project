@@ -31,13 +31,14 @@ __rte_noreturn int lcore_main_reflect(void *arg) {
   bool need_ip_checksum = !lcore_ctx->port_ctx->ip4_checksum_offload;
   bool need_udp_checksum = !lcore_ctx->port_ctx->udp_checksum_offload;
 
-  while (true) {
-    // In this bufs array, a null pointer indicates that we want to drop the
-    // packet.
-    struct rte_mbuf *bufs[BURST_SIZE] = {0};
+  size_t burst_size = lcore_ctx->port_ctx->cli_args->burst_size;
+  // In this bufs array, a null pointer indicates that we want to drop the
+  // packet.
+  std::vector<struct rte_mbuf *> bufs(burst_size);
 
+  while (true) {
     const uint16_t nb_rx =
-        rte_eth_rx_burst(port, lcore_ctx->rx_qid, bufs, BURST_SIZE);
+        rte_eth_rx_burst(port, lcore_ctx->rx_qid, bufs.data(), burst_size);
     uint16_t nb_tx = 0;
 
     if (nb_rx == 0) {
@@ -101,7 +102,7 @@ __rte_noreturn int lcore_main_reflect(void *arg) {
         }
       }
     } else {
-      nb_tx = rte_eth_tx_burst(port, lcore_ctx->tx_qid, bufs, nb_rx);
+      nb_tx = rte_eth_tx_burst(port, lcore_ctx->tx_qid, bufs.data(), nb_rx);
 
       // Free any unsent packets
       for (int i = nb_tx; i < nb_rx; i++) {
@@ -141,12 +142,14 @@ __rte_noreturn int lcore_main_send(void *arg) {
 
   auto &idx_atomic = lcore_ctx->port_ctx->tx_idx;
 
+  size_t burst_size = lcore_ctx->port_ctx->cli_args->burst_size;
+  std::vector<struct rte_mbuf *> bufs(burst_size);
+
   while (true) {
-    struct rte_mbuf *bufs[BURST_SIZE] = {0};
     int nb_pkts_alloc = 0;
     int nb_pkts_to_send = 0;
 
-    for (int i = 0; i < BURST_SIZE; i += 1) {
+    for (int i = 0; i < burst_size; i += 1) {
       bufs[i] = rte_pktmbuf_alloc(lcore_ctx->mbuf_pool);
       if (!bufs[i]) {
         break;
@@ -185,7 +188,7 @@ __rte_noreturn int lcore_main_send(void *arg) {
     }
 
     int nb_tx =
-        rte_eth_tx_burst(port, lcore_ctx->tx_qid, bufs, nb_pkts_to_send);
+        rte_eth_tx_burst(port, lcore_ctx->tx_qid, bufs.data(), nb_pkts_to_send);
 
     // Free any unsent packets
     for (int i = nb_tx; i < nb_pkts_alloc; i++) {
@@ -219,11 +222,13 @@ __rte_noreturn int lcore_main_recv(void *arg) {
 
   bool debug_printed = false;
 
+  size_t burst_size = lcore_ctx->port_ctx->cli_args->burst_size;
+  std::vector<struct rte_mbuf *> bufs(burst_size);
+
   while (true) {
-    struct rte_mbuf *bufs[BURST_SIZE] = {0};
     int nb_rx = 0;
 
-    nb_rx = rte_eth_rx_burst(port, lcore_ctx->rx_qid, bufs, BURST_SIZE);
+    nb_rx = rte_eth_rx_burst(port, lcore_ctx->rx_qid, bufs.data(), burst_size);
     uint64_t time_val = dp_get_time_value_since(start_time);
 
     if (nb_rx == 0) {

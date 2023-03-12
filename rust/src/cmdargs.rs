@@ -46,6 +46,7 @@ pub struct DPCmdArgs {
 
   pub nb_rxq: u32,
   pub nb_txq: u32,
+  pub burst_size: u32,
 
   pub rate_limit: u64,
 
@@ -104,6 +105,9 @@ pub unsafe extern "C" fn dp_parse_args(
       arg!(-t --txq <number> "Number of transmit queues per port (default: 1)")
         .default_value("1")
         .value_parser(clap::value_parser!(u32)),
+      arg!(--"burst-size" <number> "Number of packets to pass to the NIC driver at once")
+        .default_value("32")
+        .value_parser(clap::value_parser!(u32).range(1..=128)),
       arg!(-s --"stats-file" <file> "Output packet stats to CSV.")
         .required(false),
       arg!(-i --"stats-interval-ms" <millis> "Interval in milliseconds between stat steps.")
@@ -145,6 +149,7 @@ pub unsafe extern "C" fn dp_parse_args(
     nb_ports: 0,
     nb_rxq: *matches.get_one::<u32>("rxq").unwrap(),
     nb_txq: *matches.get_one::<u32>("txq").unwrap(),
+    burst_size: *matches.get_one::<u32>("burst-size").unwrap(),
     packet_size: *matches.get_one::<u32>("packet-size").unwrap(),
     rate_limit: *matches.get_one::<u64>("rate-limit").unwrap(),
     send_config: ptr::null_mut(),
