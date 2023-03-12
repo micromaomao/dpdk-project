@@ -128,6 +128,8 @@ __rte_noreturn int lcore_main_send(void *arg) {
   }
   assert(lcore_ctx->port_ctx->rte_port_started);
 
+  uint64_t rate_limit = lcore_ctx->port_ctx->cli_args->rate_limit;
+
   int buf_size = lcore_ctx->port_ctx->cli_args->packet_size + 50;
 
   DpMakePacketArgs mk_args;
@@ -141,7 +143,8 @@ __rte_noreturn int lcore_main_send(void *arg) {
 
   while (true) {
     struct rte_mbuf *bufs[BURST_SIZE] = {0};
-    int nb_pkts = 0;
+    int nb_pkts_alloc = 0;
+    int nb_pkts_to_send = 0;
 
     for (int i = 0; i < BURST_SIZE; i += 1) {
       bufs[i] = rte_pktmbuf_alloc(lcore_ctx->mbuf_pool);
@@ -152,15 +155,27 @@ __rte_noreturn int lcore_main_send(void *arg) {
         rte_pktmbuf_free(bufs[i]);
         break;
       }
-      nb_pkts += 1;
+      nb_pkts_alloc += 1;
     }
-
-    uint64_t idx_start =
-        idx_atomic.fetch_add(nb_pkts, std::memory_order_relaxed);
 
     uint64_t time_val = dp_get_time_value_since(start_time);
 
-    for (int i = 0; i < nb_pkts; i += 1) {
+    if (rate_limit) {
+      uint64_t nb_pkts_already_sent = dp_stats_get_tx(stats, time_val);
+      if (nb_pkts_already_sent < rate_limit) {
+        nb_pkts_to_send = rate_limit - nb_pkts_already_sent;
+        if (nb_pkts_to_send > nb_pkts_alloc) {
+          nb_pkts_to_send = nb_pkts_alloc;
+        }
+      }
+    } else {
+      nb_pkts_to_send = nb_pkts_alloc;
+    }
+
+    uint64_t idx_start =
+        idx_atomic.fetch_add(nb_pkts_to_send, std::memory_order_relaxed);
+
+    for (int i = 0; i < nb_pkts_to_send; i += 1) {
       uint8_t *data = rte_pktmbuf_mtod(bufs[i], uint8_t *);
       mk_args.index = idx_start++;
       mk_args.timestamp = time_val;
@@ -169,10 +184,11 @@ __rte_noreturn int lcore_main_send(void *arg) {
       rte_pktmbuf_data_len(bufs[i]) = written_len;
     }
 
-    int nb_tx = rte_eth_tx_burst(port, lcore_ctx->tx_qid, bufs, nb_pkts);
+    int nb_tx =
+        rte_eth_tx_burst(port, lcore_ctx->tx_qid, bufs, nb_pkts_to_send);
 
     // Free any unsent packets
-    for (int i = nb_tx; i < nb_pkts; i++) {
+    for (int i = nb_tx; i < nb_pkts_alloc; i++) {
       rte_pktmbuf_free(bufs[i]);
     }
 

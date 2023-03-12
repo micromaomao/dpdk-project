@@ -47,6 +47,8 @@ pub struct DPCmdArgs {
   pub nb_rxq: u32,
   pub nb_txq: u32,
 
+  pub rate_limit: u64,
+
   pub stats: *mut StatsAggregator,
 }
 
@@ -127,6 +129,9 @@ pub unsafe extern "C" fn dp_parse_args(
       arg!(--seed <seed> "Seed for sendrecv mode, 64 bit positive integer")
         .default_value("4107683144946382073")
         .value_parser(clap::value_parser!(u64)),
+      arg!(-R --"rate-limit" <nb_pkts> "Limit rate of sending, in packets per stats interval, 0 for no limit")
+        .default_value("0")
+        .value_parser(clap::value_parser!(u64)),
     ])
     .get_matches_from(&argv);
 
@@ -141,6 +146,7 @@ pub unsafe extern "C" fn dp_parse_args(
     nb_rxq: *matches.get_one::<u32>("rxq").unwrap(),
     nb_txq: *matches.get_one::<u32>("txq").unwrap(),
     packet_size: *matches.get_one::<u32>("packet-size").unwrap(),
+    rate_limit: *matches.get_one::<u64>("rate-limit").unwrap(),
     send_config: ptr::null_mut(),
     seed: *matches.get_one::<u64>("seed").unwrap(),
     stats: Box::into_raw(Box::new(make_stats_aggregator_from_arg(&matches))),

@@ -48,3 +48,51 @@ pub unsafe extern "C" fn dp_stats_add(
     }
   });
 }
+
+#[no_mangle]
+pub unsafe extern "C" fn dp_stats_get_tx(aggregator: *mut StatsAggregator, time: u64) -> u64 {
+  let agg = aggregator.as_ref().unwrap();
+  let mut res = 0;
+  agg.access_step(time, |stats| {
+    res = stats.tx_packets.load(Ordering::Relaxed);
+  });
+  res
+}
+
+/*
+/// Add the number of packets (about to be) transmitted to the stats aggregator.
+///
+/// This function deals with rate limiting, and so will return the actual number
+/// added. Caller should actually only send out this many packets.
+///
+/// A rate limit of 0 means no rate limiting.
+#[no_mangle]
+pub unsafe extern "C" fn dp_stats_add_tx(
+  aggregator: *mut StatsAggregator,
+  time: u64,
+  nb_tx: u64,
+  rate_limit: u64,
+) -> u64 {
+  let agg = aggregator.as_ref().unwrap();
+  let mut res = 0;
+  agg.access_step(time, |stats| {
+    let new_tx_tot = stats.tx_packets.fetch_add(nb_tx, Ordering::Relaxed) + nb_tx;
+    if rate_limit > 0 && new_tx_tot > rate_limit {
+      let overshot = new_tx_tot - rate_limit;
+      if overshot >= nb_tx {
+        // We have already reached or exceeded the limit even before this call.
+        // Hence revert all packets.
+        stats.tx_packets.fetch_sub(nb_tx, Ordering::Relaxed);
+        res = 0;
+      } else {
+        stats.tx_packets.fetch_sub(overshot, Ordering::Relaxed);
+        res = nb_tx - overshot;
+      }
+    } else {
+      res = nb_tx;
+    }
+  });
+  res
+}
+
+*/
